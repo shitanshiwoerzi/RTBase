@@ -137,16 +137,16 @@ public:
 	// Add code here
 	Vec3 sample(Sampler* sampler, float& pdf)
 	{
-		float r1 = sampler->next();  // 生成随机数 r1
-		float r2 = sampler->next();  // 生成随机数 r2
+		float r1 = sampler->next();  // generate random number r1
+		float r2 = sampler->next();  // generate random number r2
 
-		// 将 (r1, r2) 转换为三角形上的点
+		// convert (r1, r2) to vertices of triangle
 		float sqrtR1 = sqrt(r1);
 		float u = 1.0f - sqrtR1;
 		float v = r2 * sqrtR1;
 
-		Vec3 sampledPoint = vertices[0].p * u + vertices[1].p * v + vertices[2].p * (1 - u - v); // 重心坐标变换
-		pdf = 1.0f / area;  // 计算 PDF (均匀分布)
+		Vec3 sampledPoint = vertices[0].p * u + vertices[1].p * v + vertices[2].p * (1 - u - v); // interplate coordination
+		pdf = 1.0f / area;  // compute PDF (uniform distribution)
 		return sampledPoint;
 	}
 	Vec3 gNormal()
@@ -177,7 +177,7 @@ public:
 	// Add code here
 	bool rayAABB(const Ray& r, float& t)
 	{
-		float tmin = std::numeric_limits<float>::infinity();
+		float tmin = -std::numeric_limits<float>::infinity();
 		float tmax = std::numeric_limits<float>::infinity();
 
 		for (int i = 0; i < 3; i++) {
@@ -277,23 +277,105 @@ public:
 
 	// This can store an offset and number of triangles in a global triangle list for example
 	// But you can store this however you want!
-	 unsigned int offset;
-	 unsigned char num;
+	unsigned int offset;
+	unsigned char num;
 	BVHNode()
 	{
 		r = NULL;
 		l = NULL;
 	}
 	// Note there are several options for how to implement the build method. Update this as required
-	void build(std::vector<Triangle>& inputTriangles)
+	void build(std::vector<Triangle>& inputTriangles,
+		unsigned int startIndex,
+		unsigned int endIndex,
+		unsigned int depth)
 	{
-		// Add BVH building code here
-		
+		// compute the bounding boxes of all trianlges
+		bounds.reset();
+		for (unsigned int i = startIndex; i < endIndex; i++)
+		{
+			// extend aabb
+			bounds.extend(inputTriangles[i].vertices[0].p);
+			bounds.extend(inputTriangles[i].vertices[1].p);
+			bounds.extend(inputTriangles[i].vertices[2].p);
+		}
+
+		// number of triangles in the inspect area
+		unsigned int count = endIndex - startIndex;
+
+		// determine whether to build a leaf node
+		if (count <= MAXNODE_TRIANGLES || depth > 32)
+		{
+			// store index
+			offset = startIndex;
+			num = (unsigned char)count;
+			// this node has no more children
+			l = nullptr;
+			r = nullptr;
+			return;
+		}
+
+		// select axis
+		Vec3 diag = bounds.max - bounds.min;
+		int axis = 0;
+		if (diag.y > diag.x && diag.y > diag.z) axis = 1;
+		else if (diag.z > diag.x && diag.z > diag.y) axis = 2;
+
+		// Median division
+		unsigned int midIndex = startIndex + (count / 2);
+
+		// sorting triangles with nth_element
+		auto first = inputTriangles.begin() + startIndex;
+		auto mid = inputTriangles.begin() + midIndex;
+		auto last = inputTriangles.begin() + endIndex;
+		std::nth_element(first, mid, last, [axis](const Triangle& a, const Triangle& b) {
+			return a.centre().coords[axis] < b.centre().coords[axis];
+			});
+
+		// create left & right node
+		l = new BVHNode();
+		r = new BVHNode();
+
+		// parent doesn't store the triangles any more
+		num = 0;
+
+		// regression
+		l->build(inputTriangles, startIndex, midIndex, depth + 1);
+		r->build(inputTriangles, midIndex, endIndex, depth + 1);
+
 	}
+
 	void traverse(const Ray& ray, const std::vector<Triangle>& triangles, IntersectionData& intersection)
 	{
-		// Add BVH Traversal code here
-	
+		// intersect the AABB of the current node
+		float tAABB;
+		if (!bounds.rayAABB(ray, tAABB)) return;
+
+		// if leaf node, traverse the triangles
+		if (l == nullptr && r == nullptr)
+		{
+			for (unsigned int i = 0; i < num; i++)
+			{
+				unsigned int triIndex = offset + i;
+				const Triangle& tri = triangles[triIndex];
+				float t, u, v;
+				if (tri.Moller_RayIntersect(ray, t, u, v))
+				{
+					if (t < intersection.t) // find a closer point
+					{
+						intersection.t = t;
+						intersection.ID = triIndex;
+						intersection.alpha = u;
+						intersection.beta = v;
+						intersection.gamma = 1.0f - (u + v);
+					}
+				}
+			}
+			return;
+		}
+		// regression
+		if (l) l->traverse(ray, triangles, intersection);
+		if (r) r->traverse(ray, triangles, intersection);
 	}
 
 	IntersectionData traverse(const Ray& ray, const std::vector<Triangle>& triangles)
@@ -303,22 +385,33 @@ public:
 		traverse(ray, triangles, intersection);
 		return intersection;
 	}
+
 	bool traverseVisible(const Ray& ray, const std::vector<Triangle>& triangles, const float maxT)
 	{
-		// Add visibility code here
-		for (int i = 0; i < triangles.size(); i++)
+		float tAABB;
+		// intersect the AABB of the current node
+		if (!bounds.rayAABB(ray, tAABB)) return true;
+
+		// if leaf node, traverse the triangles
+		if (!l && !r)
 		{
-			float t;
-			float u;
-			float v;
-			if (triangles[i].rayIntersect(ray, t, u, v))
+			for (unsigned int i = 0; i < num; i++)
 			{
-				if (t < maxT)
+				unsigned int triIndex = offset + i;
+				const Triangle& tri = triangles[triIndex];
+				float t, u, v;
+				if (tri.Moller_RayIntersect(ray, t, u, v))
 				{
-					return false;
+					if (t < maxT) return false;
 				}
 			}
+			return true;
 		}
-		return true;
+		// regression
+		bool leftVis = true, rightVis = true;
+		if (l) leftVis = l->traverseVisible(ray, triangles, maxT);
+		if (!leftVis) return false;
+		if (r) rightVis = r->traverseVisible(ray, triangles, maxT);
+		return rightVis;
 	}
 };

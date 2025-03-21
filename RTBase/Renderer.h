@@ -136,7 +136,8 @@ public:
 	Colour direct(Ray& r, Sampler* sampler)
 	{
 		// Compute direct lighting for an image sampler here
-		IntersectionData intersection = scene->traverse(r);
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
+		//IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 		if (shadingData.t < FLT_MAX)
 		{
@@ -184,8 +185,9 @@ public:
 				float py = y + 0.5f;
 				Ray ray = scene->camera.generateRay(px, py);
 				//Colour col = viewNormals(ray);
-				Colour col = direct(ray, samplers);
-				//Colour col = pathTrace(ray, ,8,samplers);
+				//Colour col = direct(ray, samplers);
+				Colour throughput(1.0f, 1.0f, 1.0f);  // init throughput
+				Colour col = pathTrace(ray, throughput, 0, samplers);
 				//Colour col = albedo(ray);
 				film->splat(px, py, col);
 				unsigned char r = (unsigned char)(col.r * 255);

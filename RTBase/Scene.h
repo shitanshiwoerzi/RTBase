@@ -53,7 +53,9 @@ public:
 	AABB bounds;
 	void build()
 	{
-		// Add BVH building code here
+		// BVH build
+		if (!bvh) bvh = new BVHNode();
+		bvh->build(triangles, 0, (unsigned int)triangles.size(), 0);
 
 		// Do not touch the code below this line!
 		// Build light list
