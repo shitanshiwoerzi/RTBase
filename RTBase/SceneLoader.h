@@ -155,7 +155,8 @@ void loadInstance(std::string sceneName, std::vector<Triangle>& meshTriangles, s
 		if (roughness < 0.001f)
 		{
 			material = new GlassBSDF(loadTexture(filename, textureManager), intIOR, extIOR);
-		} else
+		}
+		else
 		{
 			material = new DielectricBSDF(loadTexture(filename, textureManager), intIOR, extIOR, roughness);
 		}
@@ -279,12 +280,15 @@ Scene* loadScene(std::string sceneName)
 	{
 		Texture* env = loadTexture(sceneName + "/" + gemscene.findProperty("envmap").getValue(""), textureManager);
 		background = new EnvironmentMap(env);
-	} else
+	}
+	else
 	{
 		background = new BackgroundColour(Colour(0.0f, 0.0f, 0.0f));
 	}
 	scene->init(meshTriangles, meshMaterials, background);
 	viewcamera.movespeed = (scene->bounds.max - scene->bounds.min).length() * 0.05f;
 	scene->build();
+	use<SceneBounds>().sceneCentre = (scene->bounds.max + scene->bounds.min) * 0.5f;
+	use<SceneBounds>().sceneRadius = (scene->bounds.max - use<SceneBounds>().sceneCentre).length();
 	return scene;
 }

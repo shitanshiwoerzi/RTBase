@@ -100,7 +100,7 @@ namespace GEMLoader
 				values.push_back(v);
 			}
 		}
-		void getValuesAsVector3(float &x, float &y, float &z, char seperator = ' ', float _default = 0)
+		void getValuesAsVector3(float& x, float& y, float& z, char seperator = ' ', float _default = 0)
 		{
 			std::vector<float> values;
 			getValuesAsArray(values, seperator, _default);
@@ -249,7 +249,8 @@ namespace GEMLoader
 					file.read(reinterpret_cast<char*>(&index), sizeof(unsigned int));
 					mesh.indices.push_back(index);
 				}
-			} else
+			}
+			else
 			{
 				file.read(reinterpret_cast<char*>(&n), sizeof(unsigned int));
 				for (unsigned int i = 0; i < n; i++)
@@ -410,12 +411,12 @@ namespace GEMLoader
 		}
 	};
 
-	#define GEM_JSON_NULL 0
-	#define GEM_JSON_BOOLEAN 1
-	#define GEM_JSON_NUMBER 2
-	#define GEM_JSON_STRING 3
-	#define GEM_JSON_ARRAY 4
-	#define GEM_JSON_DICT 5
+#define GEM_JSON_NULL 0
+#define GEM_JSON_BOOLEAN 1
+#define GEM_JSON_NUMBER 2
+#define GEM_JSON_STRING 3
+#define GEM_JSON_ARRAY 4
+#define GEM_JSON_DICT 5
 
 	class GEMJson
 	{
@@ -553,7 +554,8 @@ namespace GEMLoader
 			{
 				pos += 4;
 				return GEMJson(true);
-			} else
+			}
+			else
 			{
 				pos += 5;
 				return GEMJson(false);
@@ -569,7 +571,8 @@ namespace GEMLoader
 			if (peek() == '0')
 			{
 				get();
-			} else
+			}
+			else
 			{
 				while (std::isdigit(peek()) != 0)
 				{
@@ -727,7 +730,8 @@ namespace GEMLoader
 					property.name = item.first;
 					property.value = item.second.asStr();
 					sceneProperties.push_back(property);
-				} else
+				}
+				else
 				{
 					for (const auto& inst : item.second.vArr)
 					{

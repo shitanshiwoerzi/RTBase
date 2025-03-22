@@ -13,6 +13,13 @@
 
 #define SQ(x) (x * x)
 
+template<typename T>
+T& use()
+{
+	static T instance;
+	return instance;
+}
+
 class Colour
 {
 public:

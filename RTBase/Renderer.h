@@ -175,9 +175,9 @@ public:
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
-	void render()
-	{
-		film->incrementSPP();
+
+	// Single Thread rendering
+	void STrender() {
 		for (unsigned int y = 0; y < film->height; y++)
 		{
 			for (unsigned int x = 0; x < film->width; x++)
@@ -198,6 +198,75 @@ public:
 				canvas->draw(x, y, r, g, b);
 			}
 		}
+	}
+	// Tile based rendering
+	void MTrender() {
+		const int width = (int)film->width;
+		const int height = (int)film->height;
+
+		// tile size
+		const int tileSize = 32;
+
+		// count of tiles
+		const int numTilesX = (width + tileSize - 1) / tileSize;
+		const int numTilesY = (height + tileSize - 1) / tileSize;
+		const int totalTiles = numTilesX * numTilesY;
+
+		// atomic counters to allocate tiles to threads
+		std::atomic<int> nextTileIndex(0);
+
+		auto worker = [&](int threadID) {
+			Sampler* sampler = &samplers[threadID];
+			while (true) {
+				// get the tile index
+				int tileIndex = nextTileIndex.fetch_add(1);
+				if (tileIndex >= totalTiles) break;
+
+				// top-left point
+				int tileX = tileIndex % numTilesX;
+				int tileY = tileIndex / numTilesX;
+
+				// pixel range
+				int x0 = tileX * tileSize;
+				int y0 = tileY * tileSize;
+				int x1 = min(x0 + tileSize, width);
+				int y1 = min(y0 + tileSize, height);
+
+				for (int y = y0; y < y1; y++) {
+					for (int x = x0; x < x1; x++) {
+						// do the same thing with render()
+						float px = x + 0.5f;
+						float py = y + 0.5f;
+						Ray ray = scene->camera.generateRay(px, py);
+
+						Colour throughput(1.0f, 1.0f, 1.0f);  // init throughput
+						Colour col = pathTrace(ray, throughput, 0, sampler);
+						film->splat(px, py, col);
+						unsigned char r = (unsigned char)(col.r * 255);
+						unsigned char g = (unsigned char)(col.g * 255);
+						unsigned char b = (unsigned char)(col.b * 255);
+						film->tonemap(x, y, r, g, b);
+						canvas->draw(x, y, r, g, b);
+					}
+				}
+			}};
+
+		// start threads
+		std::vector<std::thread> threadPool;
+		for (int i = 0; i < numProcs; i++)
+		{
+			threadPool.emplace_back(worker, i);
+		}
+
+		for (auto& t : threadPool)
+		{
+			t.join();
+		}
+	}
+	void render()
+	{
+		film->incrementSPP();
+		MTrender();
 	}
 	int getSPP()
 	{
