@@ -91,7 +91,8 @@ public:
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler, bool canHitLight = true)
 	{
 		// Add pathtracer code here
-		IntersectionData intersection = scene->traverse(r);
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
+		//IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 		if (shadingData.t < FLT_MAX)
 		{
