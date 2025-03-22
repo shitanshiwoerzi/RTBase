@@ -20,6 +20,17 @@ public:
 	MTRandom* samplers;
 	std::thread** threads;
 	int numProcs;
+
+	struct Tile {
+		int x0, y0, x1, y1;
+		int spp; //current sampling count
+		bool converged; 
+		Colour mean;
+		Colour M2; // cumulative square deviation
+		Tile(int _x0, int _y0, int _x1, int _y1)
+			: x0(_x0), y0(_y0), x1(_x1), y1(_y1), spp(0), converged(false), mean(0, 0, 0), M2(0, 0, 0) {}
+	};
+
 	void init(Scene* _scene, GamesEngineeringBase::Window* _canvas)
 	{
 		scene = _scene;
@@ -204,13 +215,27 @@ public:
 		const int width = (int)film->width;
 		const int height = (int)film->height;
 
+		//for adaptive rendering
+		const int maxSPP = 64;
+		const float threshold = 0.001f;
+
 		// tile size
 		const int tileSize = 32;
 
 		// count of tiles
 		const int numTilesX = (width + tileSize - 1) / tileSize;
 		const int numTilesY = (height + tileSize - 1) / tileSize;
-		const int totalTiles = numTilesX * numTilesY;
+		std::vector<Tile> tiles;
+
+		for (int ty = 0; ty < numTilesY; ty++) {
+			for (int tx = 0; tx < numTilesX; tx++) {
+				int x0 = tx * tileSize;
+				int y0 = ty * tileSize;
+				int x1 = min(x0 + tileSize, width);
+				int y1 = min(y0 + tileSize, height);
+				tiles.emplace_back(x0, y0, x1, y1);
+			}
+		}
 
 		// atomic counters to allocate tiles to threads
 		std::atomic<int> nextTileIndex(0);
@@ -220,20 +245,12 @@ public:
 			while (true) {
 				// get the tile index
 				int tileIndex = nextTileIndex.fetch_add(1);
-				if (tileIndex >= totalTiles) break;
+				if (tileIndex >= tiles.size()) break;
+				Tile& tile = tiles[tileIndex];
+				if (tile.converged) return; // if converged, sampling over
 
-				// top-left point
-				int tileX = tileIndex % numTilesX;
-				int tileY = tileIndex / numTilesX;
-
-				// pixel range
-				int x0 = tileX * tileSize;
-				int y0 = tileY * tileSize;
-				int x1 = min(x0 + tileSize, width);
-				int y1 = min(y0 + tileSize, height);
-
-				for (int y = y0; y < y1; y++) {
-					for (int x = x0; x < x1; x++) {
+				for (int y = tile.y0; y < tile.y1; y++) {
+					for (int x = tile.x0; x < tile.x1; x++) {
 						// do the same thing with render()
 						float px = x + 0.5f;
 						float py = y + 0.5f;
@@ -242,11 +259,26 @@ public:
 						Colour throughput(1.0f, 1.0f, 1.0f);  // init throughput
 						Colour col = pathTrace(ray, throughput, 0, sampler);
 						film->splat(px, py, col);
+
+						// Welford update
+						tile.spp++;
+						Colour delta = col - tile.mean;
+						tile.mean = tile.mean + delta * (1.0f / tile.spp);
+						tile.M2 = tile.M2 + delta * (col - tile.mean);
+
 						unsigned char r = (unsigned char)(col.r * 255);
 						unsigned char g = (unsigned char)(col.g * 255);
 						unsigned char b = (unsigned char)(col.b * 255);
 						film->tonemap(x, y, r, g, b);
 						canvas->draw(x, y, r, g, b);
+					}
+				}
+
+				if (tile.spp >= 4) {
+					Colour var = tile.M2 / (float)(tile.spp - 1);
+					float lumVar = var.Lum();
+					if (lumVar < threshold || tile.spp >= maxSPP) {
+						tile.converged = true;
 					}
 				}
 			}};
