@@ -115,7 +115,7 @@ public:
 
 		Vec3 pvec = r.dir.cross(de2);
 		float det = de1.dot(pvec);
-		if (std::fabs(det) < 1e-8f) return false;
+		if (std::fabs(det) < 1e-10f) return false;
 		float invdet = 1.0f / det;
 		Vec3 T = r.o - vertices[0].p;
 		u = T.dot(pvec) * invdet;

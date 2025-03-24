@@ -93,6 +93,9 @@ public:
 		c.b = b / v;
 		return c;
 	}
+	Colour sqrt() const {
+		return Colour(std::sqrtf(r), std::sqrtf(g), std::sqrtf(b));
+	}
 	float Lum()
 	{
 		return ((0.2126f * r) + (0.7152f * g) + (0.0722f * b));
