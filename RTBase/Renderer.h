@@ -10,6 +10,7 @@
 #include "GamesEngineeringBase.h"
 #include <thread>
 #include <functional>
+#include "Denoise.h"
 
 class RayTracer
 {
@@ -24,7 +25,7 @@ public:
 	struct Tile {
 		int x0, y0, x1, y1;
 		int spp; //current sampling count
-		bool converged; 
+		bool converged;
 		Colour mean;
 		Colour M2; // cumulative square deviation
 		Tile(int _x0, int _y0, int _x1, int _y1)
@@ -101,10 +102,10 @@ public:
 
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler, bool canHitLight = true)
 	{
-		// Add pathtracer code here
 		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
 		//IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
 		if (shadingData.t < FLT_MAX)
 		{
 			if (shadingData.bsdf->isLight())
@@ -144,9 +145,9 @@ public:
 		return scene->background->evaluate(shadingData, r.dir);
 	}
 
+	// Compute direct lighting for an image sampler
 	Colour direct(Ray& r, Sampler* sampler)
 	{
-		// Compute direct lighting for an image sampler here
 		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
 		//IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
@@ -163,7 +164,8 @@ public:
 
 	Colour albedo(Ray& r)
 	{
-		IntersectionData intersection = scene->traverse(r);
+		//IntersectionData intersection = scene->traverse(r);
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
 		if (shadingData.t < FLT_MAX)
 		{
@@ -177,7 +179,8 @@ public:
 	}
 	Colour viewNormals(Ray& r)
 	{
-		IntersectionData intersection = scene->traverse(r);
+		//IntersectionData intersection = scene->traverse(r);
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
 		if (intersection.t < FLT_MAX)
 		{
 			ShadingData shadingData = scene->calculateShadingData(intersection, r);
@@ -255,6 +258,12 @@ public:
 						float py = y + 0.5f;
 						Ray ray = scene->camera.generateRay(px, py);
 
+						if (tile.spp == 0) {
+							int idx = y * width + x;
+							film->albedoBuffer[idx] = albedo(ray);
+							film->normalBuffer[idx] = viewNormals(ray);
+						}
+
 						Colour throughput(1.0f, 1.0f, 1.0f);  // init throughput
 						Colour col = pathTrace(ray, throughput, 0, sampler);
 						film->splat(px, py, col);
@@ -265,6 +274,7 @@ public:
 						tile.mean = tile.mean + delta * (1.0f / tile.spp);
 						tile.M2 = tile.M2 + delta * (col - tile.mean);
 
+						// tonemap + draw
 						unsigned char r = (unsigned char)(col.r * 255);
 						unsigned char g = (unsigned char)(col.g * 255);
 						unsigned char b = (unsigned char)(col.b * 255);
@@ -273,6 +283,7 @@ public:
 					}
 				}
 
+				// check variance
 				if (tile.spp >= 4) {
 					Colour var = tile.M2 / (float)(tile.spp - 1);
 					float lumVar = var.Lum();
@@ -294,10 +305,25 @@ public:
 			t.join();
 		}
 	}
+
 	void render()
 	{
 		film->incrementSPP();
 		MTrender();
+		float* denoised = new float[film->width * film->height * 3];
+		denoiseWithOIDN(reinterpret_cast<float*>(film->film), 
+						reinterpret_cast<float*>(film->albedoBuffer), 
+						reinterpret_cast<float*>(film->normalBuffer), 
+						denoised, 
+						film->width, film->height);
+
+		for (int i = 0; i < 10; ++i) {
+			std::cout << "denoised[" << i << "] = " << denoised[i] << std::endl;
+		}
+
+		stbi_write_hdr("raw.hdr", film->width, film->height, 3, (float*)film->film);
+		stbi_write_hdr("denoised.hdr", film->width, film->height, 3, denoised);
+		saveHDRTonemapped("denoised_tonemapped.hdr", denoised, film->width, film->height, film->SPP, 0.5f); // try lower exposure if still too bright
 	}
 	int getSPP()
 	{

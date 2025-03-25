@@ -207,6 +207,8 @@ class Film
 {
 public:
 	Colour* film;
+	Colour* albedoBuffer;
+	Colour* normalBuffer;
 	unsigned int width;
 	unsigned int height;
 	int SPP;
@@ -251,12 +253,16 @@ public:
 		width = _width;
 		height = _height;
 		film = new Colour[width * height];
+		albedoBuffer = new Colour[width * height];
+		normalBuffer = new Colour[width * height];
 		clear();
 		filter = _filter;
 	}
 	void clear()
 	{
 		memset(film, 0, width * height * sizeof(Colour));
+		memset(albedoBuffer, 0, width * height * sizeof(Colour));
+		memset(normalBuffer, 0, width * height * sizeof(Colour));
 		SPP = 0;
 	}
 	void incrementSPP()
