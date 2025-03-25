@@ -70,4 +70,27 @@ public:
 	{
 		return 1.0f / (4.0f * M_PI);
 	}
+	static Vec3 sampleGGXVNDF(const Vec3& wo, float alpha, float u1, float u2)
+	{
+		// Transform view direction to hemisphere configuration
+		Vec3 V = Vec3(alpha * wo.x, alpha * wo.y, wo.z).normalize();
+
+		// Orthonormal basis
+		float lensq = V.x * V.x + V.y * V.y;
+		Vec3 T1 = lensq > 0.0f ? Vec3(-V.y, V.x, 0).normalize() : Vec3(1, 0, 0);
+		Vec3 T2 = V.cross(T1);
+
+		// Sample point with polar coordinates
+		float r = sqrtf(u1);
+		float phi = 2.0f * M_PI * u2;
+		float t1 = r * cosf(phi);
+		float t2 = r * sinf(phi);
+		float s = 0.5f * (1.0f + V.z);
+		t2 = (1.0f - s) * sqrtf(1.0f - t1 * t1) + s * t2;
+
+		// Project onto hemisphere
+		Vec3 Nh = T1 * t1 + T2 * t2 + V * sqrtf(std::max(0.0f, 1.0f - t1 * t1 - t2 * t2));
+		Vec3 h = Vec3(alpha * Nh.x, alpha * Nh.y, std::max(0.0f, Nh.z)).normalize();
+		return h;
+	}
 };

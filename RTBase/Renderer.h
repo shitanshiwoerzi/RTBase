@@ -137,7 +137,17 @@ public:
 			Colour indirect;
 			float pdf;
 			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, indirect, pdf);
+			if (pdf < 1e-6f || !std::isfinite(pdf) || indirect.hasNaN())
+			{
+				return direct;
+			}
 			float cosTerm = fmaxf(0.0f, Dot(wi, shadingData.sNormal));// Cosine term
+
+			if (!std::isfinite(cosTerm) || !std::isfinite(indirect.r) || !std::isfinite(indirect.g) || !std::isfinite(indirect.b))
+			{
+				return direct;
+			}
+
 			pathThroughput = pathThroughput * indirect * (cosTerm / pdf);// accumulate
 			r.init(shadingData.x + (wi * EPSILON), wi);
 			return (direct + pathTrace(r, pathThroughput, depth + 1, sampler, shadingData.bsdf->isPureSpecular()));
@@ -316,10 +326,6 @@ public:
 						reinterpret_cast<float*>(film->normalBuffer), 
 						denoised, 
 						film->width, film->height);
-
-		for (int i = 0; i < 10; ++i) {
-			std::cout << "denoised[" << i << "] = " << denoised[i] << std::endl;
-		}
 
 		stbi_write_hdr("raw.hdr", film->width, film->height, 3, (float*)film->film);
 		stbi_write_hdr("denoised.hdr", film->width, film->height, 3, denoised);

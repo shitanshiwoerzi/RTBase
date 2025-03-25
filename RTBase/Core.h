@@ -100,6 +100,9 @@ public:
 	{
 		return ((0.2126f * r) + (0.7152f * g) + (0.0722f * b));
 	}
+	bool hasNaN() const {
+		return isnan(r) || isnan(g) || isnan(b);
+	}
 };
 
 class Vec3
