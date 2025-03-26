@@ -294,20 +294,22 @@ public:
 	}
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
-		Vec3 wo = shadingData.frame.toLocal(shadingData.wo); // out direction
-		bool into = wo.z > 0.0f; // if enter from outside
-		float iorIn = into ? extIOR : intIOR;
-		float iorOut = into ? intIOR : extIOR;
-		float eta = iorIn / iorOut;
+		Vec3 wo = shadingData.frame.toLocal(shadingData.wo);
+		bool entering = (wo.z > 0.0f);
+		float n_i = entering ? extIOR : intIOR;
+		float n_t = entering ? intIOR : extIOR;
+		float eta = n_i / n_t;
 
 		float cosThetaI = fabsf(wo.z);
-		float sin2ThetaI = std::max(0.0f, 1.0f - cosThetaI * cosThetaI);
+		float sin2ThetaI = 1.0f - cosThetaI * cosThetaI;
 		float sin2ThetaT = eta * eta * sin2ThetaI;
 
-		float fresnel = ShadingHelper::fresnelDielectric(cosThetaI, iorIn, iorOut);
+		// 2) Fresnel
+		float F = ShadingHelper::fresnelDielectric(cosThetaI, n_i, n_t);
 
-		if (sin2ThetaT >= 1.0f) // full reflex
+		if (sin2ThetaT >= 1.0f)
 		{
+			// full reflex
 			Vec3 wi = Vec3(-wo.x, -wo.y, wo.z);
 			pdf = 1.0f;
 			reflectedColour = albedo->sample(shadingData.tu, shadingData.tv);
@@ -315,22 +317,26 @@ public:
 		}
 		else
 		{
-			if (sampler->next() < fresnel) // part reflex
+			if (sampler->next() < F)
 			{
+				// reflex
 				Vec3 wi = Vec3(-wo.x, -wo.y, wo.z);
-				pdf = fresnel;
+				pdf = F;
 				reflectedColour = albedo->sample(shadingData.tu, shadingData.tv);
 				return shadingData.frame.toWorld(wi);
 			}
-			else // part reflect
+			else
 			{
+				// reflect
 				float cosThetaT = sqrtf(1.0f - sin2ThetaT);
+				float sign = (wo.z > 0) ? -1.0f : 1.0f;
 				Vec3 wt = Vec3(
 					-wo.x * eta,
 					-wo.y * eta,
-					(wo.z > 0.0f ? -1.0f : 1.0f) * cosThetaT
+					wo.z * sign * cosThetaT - cosThetaT * sign + (eta * cosThetaI)
 				);
-				pdf = 1.0f - fresnel;
+				// wt.z = (wo.z > 0 ? -cosThetaT : cosThetaT)
+				pdf = 1.0f - F;
 				reflectedColour = albedo->sample(shadingData.tu, shadingData.tv);
 				return shadingData.frame.toWorld(wt);
 			}
@@ -338,7 +344,7 @@ public:
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
-		return Colour();
+		return Colour(0.0f, 0.0f, 0.0f);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
