@@ -50,52 +50,177 @@ public:
 		film->clear();
 	}
 
-	Colour computeDirect(ShadingData shadingData, Sampler* sampler)
+	//Colour computeDirect(ShadingData shadingData, Sampler* sampler)
+	//{
+	//	if (shadingData.bsdf->isPureSpecular() == true)
+	//	{
+	//		return Colour(0.0f, 0.0f, 0.0f);
+	//	}
+	//	// Sample a light
+	//	float pmf;
+	//	Light* light = scene->sampleLight(sampler, pmf);
+	//	// Sample a point on the light
+	//	float pdf;
+	//	Colour emitted;
+	//	Vec3 p = light->sample(shadingData, sampler, emitted, pdf);
+	//	if (light->isArea())
+	//	{
+	//		// Calculate GTerm
+	//		Vec3 wi = p - shadingData.x;
+	//		float l = wi.lengthSq();
+	//		wi = wi.normalize();
+	//		float GTerm = (max(Dot(wi, shadingData.sNormal), 0.0f) * max(-Dot(wi, light->normal(shadingData, wi)), 0.0f)) / l;
+	//		if (GTerm > 0)
+	//		{
+	//			// Trace
+	//			if (scene->visible(shadingData.x, p))
+	//			{
+	//				// Shade
+	//				return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+	//			}
+	//		}
+	//	}
+	//	else
+	//	{
+	//		// Calculate GTerm
+	//		Vec3 wi = p;
+	//		float GTerm = max(Dot(wi, shadingData.sNormal), 0.0f);
+	//		if (GTerm > 0)
+	//		{
+	//			// Trace
+	//			if (scene->visible(shadingData.x, shadingData.x + (p * 10000.0f)))
+	//			{
+	//				// Shade
+	//				return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+	//			}
+	//		}
+	//	}
+	//	return Colour(0.0f, 0.0f, 0.0f);
+	//}
+
+	Colour computeDirect(const ShadingData& shadingData, Sampler* sampler)
 	{
-		if (shadingData.bsdf->isPureSpecular() == true)
-		{
+		if (shadingData.bsdf->isPureSpecular())
 			return Colour(0.0f, 0.0f, 0.0f);
-		}
-		// Sample a light
+
+		Colour result(0.0f, 0.0f, 0.0f);
+
+		//----------------------------
+		// (A) Light Sampling
+		//----------------------------
+		//   - 在场景光源列表里抽取一个 Light，概率 pmf
 		float pmf;
 		Light* light = scene->sampleLight(sampler, pmf);
-		// Sample a point on the light
-		float pdf;
-		Colour emitted;
-		Vec3 p = light->sample(shadingData, sampler, emitted, pdf);
-		if (light->isArea())
+		if (light)
 		{
-			// Calculate GTerm
-			Vec3 wi = p - shadingData.x;
-			float l = wi.lengthSq();
-			wi = wi.normalize();
-			float GTerm = (max(Dot(wi, shadingData.sNormal), 0.0f) * max(-Dot(wi, light->normal(shadingData, wi)), 0.0f)) / l;
-			if (GTerm > 0)
+			float lightPdf;
+			Colour Le;
+			// 从光源上采样一个方向 / 位置
+			Vec3 wi = light->sample(shadingData, sampler, Le, lightPdf);
+
+			if (lightPdf > 1e-6f && pmf > 1e-6f && Le.Lum() > 0.0f)
 			{
-				// Trace
-				if (scene->visible(shadingData.x, p))
+				// 可见性判断
+				bool visible = false;
+
+				// 如果是 AreaLight: p是坐标 => GTerm；如果是 EnvLight: p是方向 => cosTerm
+				if (light->isArea())
 				{
-					// Shade
-					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+					// area light case
+					// p = shadingData.x + direction*distance
+					// light->normal(...) => 计算三角形法线
+					// GTerm = cos(θx)*cos(θl)/r²
+					// 先判断可见性
+					Vec3 toLight = wi - shadingData.x; // 这里wi是位置
+					float dist2 = toLight.lengthSq();
+					Vec3 dir = toLight.normalize();
+					if (scene->visible(shadingData.x, wi))
+					{
+						float cos_x = max(Dot(dir, shadingData.sNormal), 0.0f);
+						float cos_l = max(-Dot(dir, light->normal(shadingData, dir)), 0.0f);
+						float G = (cos_x * cos_l) / dist2;
+						// evaluate BSDF
+						Colour f = shadingData.bsdf->evaluate(shadingData, dir);
+
+						// 还要 BSDF PDF => 这里可选 => MIS
+						float bsdfPdf = shadingData.bsdf->PDF(shadingData, dir);
+
+						// MIS weight
+						float w_light = (lightPdf * pmf) * (lightPdf * pmf);
+						float w_bsdf = bsdfPdf * bsdfPdf; // or skip MIS for area
+						float weight = w_light / (w_light + w_bsdf + 1e-6f);
+
+						result = result + f * Le * G * weight / (lightPdf * pmf);
+					}
+				}
+				else
+				{
+					// environment light case
+					// wi就是一个方向
+					if (scene->visible(shadingData.x, shadingData.x + wi * 1e4f))
+					{
+						// BSDF evaluate
+						Colour f = shadingData.bsdf->evaluate(shadingData, wi);
+						float cosTerm = max(Dot(wi, shadingData.sNormal), 0.0f);
+
+						// BSDF PDF
+						float bsdfPdf = shadingData.bsdf->PDF(shadingData, wi);
+
+						// MIS
+						float w_light = (lightPdf * pmf) * (lightPdf * pmf);
+						float w_bsdf = bsdfPdf * bsdfPdf;
+						float weight = w_light / (w_light + w_bsdf + 1e-6f);
+
+						result = result + f * Le * cosTerm * weight / (lightPdf * pmf);
+					}
 				}
 			}
 		}
-		else
+
+		//----------------------------
+		// (B) BSDF Sampling
+		//----------------------------
+		float bsdfPdf;
+		Colour bsdfVal;
+		Vec3 wi_bsdf = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, bsdfPdf);
+
+		if (bsdfPdf > 1e-6f && bsdfVal.Lum() > 0.0f)
 		{
-			// Calculate GTerm
-			Vec3 wi = p;
-			float GTerm = max(Dot(wi, shadingData.sNormal), 0.0f);
-			if (GTerm > 0)
+			float cosTerm = max(Dot(wi_bsdf, shadingData.sNormal), 0.0f);
+			if (cosTerm > 0.0f)
 			{
-				// Trace
-				if (scene->visible(shadingData.x, shadingData.x + (p * 10000.0f)))
+				// shadow ray
+				if (scene->visible(shadingData.x, shadingData.x + wi_bsdf * 1e4f))
 				{
-					// Shade
-					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+					// check if hit area light or environment
+					Colour Le(0.0f, 0.0f, 0.0f);
+					float lightPdf = 0.0f;
+					float pmfLocal = 1.0f; // assume single env or we do logic if multiple lights
+
+					// environment?
+					if (scene->background)
+					{
+						Le = scene->background->evaluate(shadingData, wi_bsdf);
+						lightPdf = scene->background->PDF(shadingData, wi_bsdf);
+					}
+
+					// 也可以做 if we hit triangle with isLight()
+					// → IntersectionData check
+
+					if (lightPdf > 1e-6f && Le.Lum() > 0.0f)
+					{
+						// MIS
+						float w_bsdf = bsdfPdf * bsdfPdf;
+						float w_light = (lightPdf * pmfLocal) * (lightPdf * pmfLocal);
+						float weight = w_bsdf / (w_bsdf + w_light + 1e-6f);
+
+						result = result + bsdfVal * Le * cosTerm * weight / bsdfPdf;
+					}
 				}
 			}
 		}
-		return Colour(0.0f, 0.0f, 0.0f);
+
+		return result;
 	}
 
 	const int MAX_DEPTH = 10;
@@ -321,11 +446,11 @@ public:
 		film->incrementSPP();
 		MTrender();
 		float* denoised = new float[film->width * film->height * 3];
-		denoiseWithOIDN(reinterpret_cast<float*>(film->film), 
-						reinterpret_cast<float*>(film->albedoBuffer), 
-						reinterpret_cast<float*>(film->normalBuffer), 
-						denoised, 
-						film->width, film->height);
+		denoiseWithOIDN(reinterpret_cast<float*>(film->film),
+			reinterpret_cast<float*>(film->albedoBuffer),
+			reinterpret_cast<float*>(film->normalBuffer),
+			denoised,
+			film->width, film->height);
 
 		stbi_write_hdr("raw.hdr", film->width, film->height, 3, (float*)film->film);
 		stbi_write_hdr("denoised.hdr", film->width, film->height, 3, denoised);

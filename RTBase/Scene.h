@@ -137,6 +137,21 @@ public:
 		return lights[std::min((int)(r1 * lights.size()), (int)(lights.size() - 1))];
 	}
 
+	float PDF_L(const ShadingData& shadingData, const Vec3& wi) const
+	{
+		float pdf = 0.0f;
+		for (auto light : lights)
+		{
+			pdf += light->PDF(shadingData, wi);
+		}
+
+		if (background)
+		{
+			pdf += background->PDF(shadingData, wi);
+		}
+		return pdf;
+	}
+
 	// Do not modify any code below this line
 	void init(std::vector<Triangle> meshTriangles, std::vector<BSDF*> meshMaterials, Light* _background)
 	{
