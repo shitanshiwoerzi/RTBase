@@ -12,6 +12,18 @@
 #include <functional>
 #include "Denoise.h"
 
+struct VPL
+{
+	// PDF 里也建议存一个 ShadingData
+	// or at least position, normal, flux/Le, bsdf
+	ShadingData sData;
+	Colour Le;
+
+	VPL() {}
+	VPL(const ShadingData& _sData, const Colour& _Le)
+		: sData(_sData), Le(_Le) {}
+};
+
 class RayTracer
 {
 public:
@@ -21,6 +33,7 @@ public:
 	MTRandom* samplers;
 	std::thread** threads;
 	int numProcs;
+	std::vector<VPL> vpls;
 
 	struct Tile {
 		int x0, y0, x1, y1;
@@ -37,7 +50,7 @@ public:
 		scene = _scene;
 		canvas = _canvas;
 		film = new Film();
-		film->init((unsigned int)scene->camera.width, (unsigned int)scene->camera.height, new GaussianFilter(1.0f, 1.0f));
+		film->init((unsigned int)scene->camera.width, (unsigned int)scene->camera.height, new BoxFilter());
 		SYSTEM_INFO sysInfo;
 		GetSystemInfo(&sysInfo);
 		numProcs = sysInfo.dwNumberOfProcessors;
@@ -219,7 +232,8 @@ public:
 				}
 			}
 		}
-
+		//Colour indirect = computeVPLContribution(shadingData);
+		//return result + indirect;
 		return result;
 	}
 
@@ -443,6 +457,7 @@ public:
 
 	void render()
 	{
+		//traceVPLs(samplers, 64);
 		film->incrementSPP();
 		MTrender();
 		float* denoised = new float[film->width * film->height * 3];
@@ -467,5 +482,91 @@ public:
 	void savePNG(std::string filename)
 	{
 		stbi_write_png(filename.c_str(), canvas->getWidth(), canvas->getHeight(), 3, canvas->getBackBuffer(), canvas->getWidth() * 3);
+	}
+	void traceVPLs(Sampler* sampler, int N_VPLs)
+	{
+		vpls.clear();
+		const int maxBounces = 3; // or 1 for simpler
+
+		for (int i = 0; i < N_VPLs; i++)
+		{
+			// sample a light source
+			float pmf;
+			Light* light = scene->sampleLight(sampler, pmf);
+			if (!light || pmf < 1e-6f)
+				continue;
+
+			// sample a ray
+			float rayPdf;
+			Colour Lemit;
+			Ray ray = light->sampleRay(sampler, rayPdf, Lemit);
+			if (rayPdf < 1e-6f || Lemit.Lum() < 1e-9f)
+				continue;
+
+			// init flux = Lemit / (pmf * rayPdf * N_VPLs)
+			Colour flux = Lemit / ((pmf * rayPdf + 1e-6f) * (float)N_VPLs);
+
+			//start bouncing
+			for (int bounce = 0; bounce < maxBounces; bounce++)
+			{
+				IntersectionData isect = scene->bvh->traverse(ray, scene->triangles);
+				if (isect.t >= FLT_MAX) break; // hit background => stop
+
+				ShadingData sData = scene->calculateShadingData(isect, ray);
+				if (sData.bsdf->isLight()) break;
+
+				// store vpl
+				VPL vpl;
+				vpl.sData = sData;
+				vpl.Le = flux;
+				vpls.push_back(vpl);
+
+				// next time bounce
+				Colour f;
+				float bsdfPdf;
+				Vec3 wi = sData.bsdf->sample(sData, sampler, f, bsdfPdf);
+				float cosTerm = max(Dot(wi, sData.sNormal), 0.0f);
+
+				// update flux
+				flux = flux * f * (cosTerm / (bsdfPdf + 1e-6f));
+
+				// russian Roulette
+				if (bounce > 1)
+				{
+					float rr = min(flux.Lum(), 0.9f);
+					if (sampler->next() > rr) break;
+					flux = flux / rr;
+				}
+
+				if (flux.Lum() < 1e-4f) break;
+				ray.init(sData.x + wi * EPSILON, wi);
+			}
+		}
+	}
+	Colour computeVPLContribution(const ShadingData& shadingData)
+	{
+		Colour sum(0.0f, 0.0f, 0.0f);
+
+		for (auto& vpl : vpls)
+		{
+			// geometry
+			Vec3 dir = vpl.sData.x - shadingData.x;
+			float dist2 = dir.lengthSq();
+			if (dist2 < 1e-9f) continue;
+			float dist = sqrtf(dist2);
+			dir = dir / dist;
+
+			float cos_x = max(Dot(dir, shadingData.sNormal), 0.0f);
+			float cos_vpl = max(-Dot(dir, vpl.sData.sNormal), 0.0f);
+			float G = (cos_x * cos_vpl) / (dist2);
+			if (G <= 0) continue;
+			if (!scene->visible(shadingData.x, vpl.sData.x)) continue;
+
+			// BSDF at shadingData
+			Colour f_cam = shadingData.bsdf->evaluate(shadingData, dir);
+			sum = sum + f_cam * vpl.Le * G;
+		}
+
+		return sum;
 	}
 };

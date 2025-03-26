@@ -25,6 +25,7 @@ public:
 	virtual float totalIntegratedPower() = 0;
 	virtual Vec3 samplePositionFromLight(Sampler* sampler, float& pdf) = 0;
 	virtual Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf) = 0;
+	virtual Ray sampleRay(Sampler* sampler, float& pdf, Colour& emitted) = 0;
 };
 
 class AreaLight : public Light
@@ -74,6 +75,21 @@ public:
 		frame.fromVector(triangle->gNormal());
 		return frame.toWorld(wi);
 	}
+	Ray sampleRay(Sampler* sampler, float& pdf, Colour& emitted) override
+	{
+		// sample a position on area
+		float posPdf;
+		Vec3 p = samplePositionFromLight(sampler, posPdf);
+		// sample a direction
+		float dirPdf;
+		Vec3 d = sampleDirectionFromLight(sampler, dirPdf);
+		pdf = posPdf * dirPdf;
+		emitted = emission;
+		Ray r;
+		r.init(p + d * EPSILON, d);
+		return r;
+	}
+
 };
 
 class BackgroundColour : public Light
@@ -125,6 +141,20 @@ public:
 		pdf = SamplingDistributions::uniformSpherePDF(wi);
 		return wi;
 	}
+	Ray sampleRay(Sampler* sampler, float& pdfRay, Colour& outEmission) override
+	{
+		Vec3 dir = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
+		float dirPdf = SamplingDistributions::uniformSpherePDF(dir);
+		float R = use<SceneBounds>().sceneRadius;
+		Vec3 center = use<SceneBounds>().sceneCentre;
+		Vec3 origin = center - dir * (R + 2.0f);
+		Ray r;
+		r.init(origin, dir);
+		pdfRay = dirPdf;
+		outEmission = emission;
+		return r;
+	}
+
 };
 
 class EnvMapSampler {
@@ -310,4 +340,34 @@ public:
 		pdf = SamplingDistributions::uniformSpherePDF(wi);
 		return wi;
 	}
+
+	Ray sampleRay(Sampler* _sampler, float& pdfRay, Colour& emission) override
+	{
+		//sample a direction from environment sampler
+		float dirPdf;
+		Vec3 dir = this->sampler.sample(_sampler->next(), _sampler->next(), dirPdf);
+
+		// get environment radiance: 
+		Colour L = this->sampler.evaluate(dir);
+
+		// put the start to the scenebound
+		float R = use<SceneBounds>().sceneRadius;
+		Vec3 center = use<SceneBounds>().sceneCentre;
+		// ray direction = -dir
+		Vec3 origin = center - dir * (R + 2.0f);
+		Ray ray;
+		ray.init(origin, dir);// the ray is from outside to scene
+
+		//   basicly, pdfRay = dirPdf;
+		//   bu we need consider geometry factor： solid angle => area on sphere(need updating)
+		pdfRay = dirPdf;
+
+		//   environment map radiance × area factor?
+		//   simplify: emission = L
+		emission = L;
+		return ray;
+	}
+
+
+
 };
