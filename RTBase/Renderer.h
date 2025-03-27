@@ -154,13 +154,11 @@ public:
 						float G = (cos_x * cos_l) / dist2;
 						// evaluate BSDF
 						Colour f = shadingData.bsdf->evaluate(shadingData, dir);
-
-						// 还要 BSDF PDF => 这里可选 => MIS
 						float bsdfPdf = shadingData.bsdf->PDF(shadingData, dir);
 
 						// MIS weight
 						float w_light = (lightPdf * pmf) * (lightPdf * pmf);
-						float w_bsdf = bsdfPdf * bsdfPdf; // or skip MIS for area
+						float w_bsdf = bsdfPdf * bsdfPdf;
 						float weight = w_light / (w_light + w_bsdf + 1e-6f);
 
 						result = result + f * Le * G * weight / (lightPdf * pmf);
@@ -169,7 +167,6 @@ public:
 				else
 				{
 					// environment light case
-					// wi就是一个方向
 					if (scene->visible(shadingData.x, shadingData.x + wi * 1e4f))
 					{
 						// BSDF evaluate

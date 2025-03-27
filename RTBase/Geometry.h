@@ -359,7 +359,7 @@ public:
 				unsigned int triIndex = offset + i;
 				const Triangle& tri = triangles[triIndex];
 				float t, u, v;
-				if (tri.Moller_RayIntersect(ray, t, u, v))
+				if (tri.rayIntersect(ray, t, u, v))
 				{
 					if (t < intersection.t) // find a closer point
 					{

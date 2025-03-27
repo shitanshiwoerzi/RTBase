@@ -184,7 +184,7 @@ public:
 		C = _C;
 	}
 
-	float filter(float x) const {
+	float filter(float x, float y) const {
 		x = std::abs(x);
 		if (x < 1.0f) {
 			return ((12 - 9 * B - 6 * C) * std::pow(x, 3)
@@ -200,6 +200,11 @@ public:
 		else {
 			return 0;
 		}
+	}
+
+	int size() const
+	{
+		return 0;
 	}
 };
 
