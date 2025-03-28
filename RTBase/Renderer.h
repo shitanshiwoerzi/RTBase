@@ -11,6 +11,7 @@
 #include <thread>
 #include <functional>
 #include "Denoise.h"
+#include <mutex>
 
 struct VPL
 {
@@ -23,6 +24,9 @@ struct VPL
 	VPL(const ShadingData& _sData, const Colour& _Le)
 		: sData(_sData), Le(_Le) {}
 };
+
+extern bool isLightTrace = true;
+extern bool isPathTrace = false;
 
 class RayTracer
 {
@@ -291,83 +295,6 @@ public:
 		return scene->background->evaluate(r.dir);
 	}
 
-	//void lightTrace(Sampler* sampler, int numPaths = 500000) {
-	//	for (int i = 0; i < numPaths; i++) {
-
-	//		// Sample light source
-	//		float pmf;
-	//		Light* light = scene->sampleLight(sampler, pmf);
-	//		if (!light) continue;
-
-	//		// Sample position and direction from the light
-	//		float pdfPos, pdfDir;
-	//		Vec3 lightPos = light->samplePositionFromLight(sampler, pdfPos);
-	//		Vec3 lightDir = light->sampleDirectionFromLight(sampler, pdfDir);
-
-	//		if (pdfPos < 1e-6f || pdfDir < 1e-6f) continue;
-
-	//		ShadingData lightSD;
-	//		lightSD.x = lightPos;
-	//		lightSD.sNormal = light->normal(lightDir);
-	//		lightSD.wo = -lightDir;
-
-	//		Colour Le = light->evaluate(lightSD.wo);
-	//		if (Le.Lum() < 1e-8f) continue;
-
-	//		Colour throughput = Le / ((pmf * pdfPos * pdfDir) + 1e-6f);
-	//		Ray ray(lightPos + lightDir * EPSILON, lightDir);
-
-	//		for (int depth = 0; depth < MAX_DEPTH; ++depth)
-	//		{
-	//			IntersectionData intersection = scene->bvh->traverse(ray, scene->triangles);
-	//			if (intersection.t >= FLT_MAX) break;
-
-	//			ShadingData shadingData = scene->calculateShadingData(intersection, ray);
-	//			BSDF* bsdf = shadingData.bsdf;
-
-	//			// connect to camera
-	//			float px, py;
-	//			if (scene->camera.projectOntoCamera(shadingData.x, px, py))
-	//			{
-	//				if (scene->visible(shadingData.x, scene->camera.origin))
-	//				{
-	//					Vec3 wo = -ray.dir;
-	//					shadingData.wo = wo;
-
-	//					Vec3 toCam = (scene->camera.origin - shadingData.x).normalize();
-	//					Colour f = bsdf->evaluate(shadingData, toCam);
-	//					float cosTheta = max(0.0f, Dot(toCam, shadingData.sNormal));
-	//					Colour col = throughput * f * cosTheta;
-	//					if (col.Lum() > 0)
-	//					{
-	//						film->splat(px, py, col);
-	//						unsigned char r = (unsigned char)(col.r * 255);
-	//						unsigned char g = (unsigned char)(col.g * 255);
-	//						unsigned char b = (unsigned char)(col.b * 255);
-	//						film->tonemap(px, py, r, g, b);
-	//						canvas->draw(px, py, r, g, b);
-	//					}
-	//				}
-	//			}
-
-	//			// Russian roulette
-	//			float p = min(throughput.Lum(), 0.9f);
-	//			if (sampler->next() > p) break;
-	//			throughput = throughput / p;
-
-	//			// Sample next direction
-	//			Colour bsdfVal;
-	//			float pdf;
-	//			Vec3 wi = bsdf->sample(shadingData, sampler, bsdfVal, pdf);
-	//			float cosTheta = max(0.0f, Dot(wi, shadingData.sNormal));
-	//			if (pdf < 1e-6f || bsdfVal.Lum() <= 0.0f || cosTheta <= 0.0f) break;
-
-	//			throughput = throughput * bsdfVal * (cosTheta / pdf);
-	//			ray.init(shadingData.x + wi * EPSILON, wi);
-	//		}
-	//	}
-	//}
-
 	void connectToCamera(Vec3 p, Vec3 n, Colour col) {
 		float x, y;
 		if (!scene->camera.projectOntoCamera(p, x, y)) return;
@@ -389,13 +316,17 @@ public:
 				float cos2 = costheta * costheta;
 				float cos4 = cos2 * cos2;
 				float we = 1.0f / (scene->camera.Afilm * cos4);
+				int idx = (int)y * film->width + (int)x;
+				if (!isPathTrace && idx <= film->width * film->height) {
+					film->albedoBuffer[idx] = col;
+					film->normalBuffer[idx] = Colour(fabsf(n.x), fabsf(n.y), fabsf(n.z));
+				}
 				film->splat(x, y, col * GeomtryTermHalfArea * we);
 			}
 		}
 		else {
 			return;
 		}
-
 	}
 
 	void lightTrace(Sampler* sampler) {
@@ -428,7 +359,7 @@ public:
 			Vec3 wi1 = scene->camera.origin - shadingData.x;
 			wi1 = wi1.normalize();
 
-			connectToCamera(shadingData.x, shadingData.sNormal, (pathThroughput * shadingData.bsdf->evaluate(shadingData, -wi1) * Le));
+			connectToCamera(shadingData.x, shadingData.sNormal, (pathThroughput * shadingData.bsdf->evaluate(shadingData, wi1) * Le));
 
 			if (depth > MAX_DEPTH)
 			{
@@ -587,7 +518,7 @@ public:
 						float py = y + 0.5f;
 						Ray ray = scene->camera.generateRay(px, py);
 
-						if (tile.spp == 0) {
+						if (tile.spp == 0 && isPathTrace) {
 							int idx = y * width + x;
 							film->albedoBuffer[idx] = albedo(ray);
 							film->normalBuffer[idx] = viewNormals(ray);
@@ -698,18 +629,23 @@ public:
 	{
 		//traceVPLs(samplers, 64);
 		film->incrementSPP();
-		LightTraceMT();
-		//PathTraceMT();
+		if (isLightTrace) LightTraceMT();
+		if (isPathTrace) PathTraceMT();
 		float* denoised = new float[film->width * film->height * 3];
-		denoiseWithOIDN(reinterpret_cast<float*>(film->film),
+		Colour* hdrpixels = new Colour[film->width * film->height];
+		for (unsigned int i = 0; i < (film->width * film->height); i++)
+		{
+			hdrpixels[i] = film->film[i] / (float)film->SPP;
+		}
+		denoiseWithOIDN(reinterpret_cast<float*>(hdrpixels),
 			reinterpret_cast<float*>(film->albedoBuffer),
 			reinterpret_cast<float*>(film->normalBuffer),
 			denoised,
 			film->width, film->height);
 
-		stbi_write_hdr("raw.hdr", film->width, film->height, 3, (float*)film->film);
+		savePNG("GI.png");
+		saveHDR("GI.hdr");
 		stbi_write_hdr("denoised.hdr", film->width, film->height, 3, denoised);
-		saveHDRTonemapped("denoised_tonemapped.hdr", denoised, film->width, film->height, film->SPP, 0.5f); // try lower exposure if still too bright
 	}
 	int getSPP()
 	{
