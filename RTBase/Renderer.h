@@ -150,7 +150,7 @@ public:
 					if (scene->visible(shadingData.x, wi))
 					{
 						float cos_x = max(Dot(dir, shadingData.sNormal), 0.0f);
-						float cos_l = max(-Dot(dir, light->normal(shadingData, dir)), 0.0f);
+						float cos_l = max(-Dot(dir, light->normal(dir)), 0.0f);
 						float G = (cos_x * cos_l) / dist2;
 						// evaluate BSDF
 						Colour f = shadingData.bsdf->evaluate(shadingData, dir);
@@ -210,7 +210,7 @@ public:
 					// environment?
 					if (scene->background)
 					{
-						Le = scene->background->evaluate(shadingData, wi_bsdf);
+						Le = scene->background->evaluate(wi_bsdf);
 						lightPdf = scene->background->PDF(shadingData, wi_bsdf);
 					}
 
@@ -234,7 +234,7 @@ public:
 		return result;
 	}
 
-	const int MAX_DEPTH = 10;
+	const int MAX_DEPTH = 16;
 
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler, bool canHitLight = true)
 	{
@@ -288,7 +288,171 @@ public:
 			r.init(shadingData.x + (wi * EPSILON), wi);
 			return (direct + pathTrace(r, pathThroughput, depth + 1, sampler, shadingData.bsdf->isPureSpecular()));
 		}
-		return scene->background->evaluate(shadingData, r.dir);
+		return scene->background->evaluate(r.dir);
+	}
+
+	//void lightTrace(Sampler* sampler, int numPaths = 500000) {
+	//	for (int i = 0; i < numPaths; i++) {
+
+	//		// Sample light source
+	//		float pmf;
+	//		Light* light = scene->sampleLight(sampler, pmf);
+	//		if (!light) continue;
+
+	//		// Sample position and direction from the light
+	//		float pdfPos, pdfDir;
+	//		Vec3 lightPos = light->samplePositionFromLight(sampler, pdfPos);
+	//		Vec3 lightDir = light->sampleDirectionFromLight(sampler, pdfDir);
+
+	//		if (pdfPos < 1e-6f || pdfDir < 1e-6f) continue;
+
+	//		ShadingData lightSD;
+	//		lightSD.x = lightPos;
+	//		lightSD.sNormal = light->normal(lightDir);
+	//		lightSD.wo = -lightDir;
+
+	//		Colour Le = light->evaluate(lightSD.wo);
+	//		if (Le.Lum() < 1e-8f) continue;
+
+	//		Colour throughput = Le / ((pmf * pdfPos * pdfDir) + 1e-6f);
+	//		Ray ray(lightPos + lightDir * EPSILON, lightDir);
+
+	//		for (int depth = 0; depth < MAX_DEPTH; ++depth)
+	//		{
+	//			IntersectionData intersection = scene->bvh->traverse(ray, scene->triangles);
+	//			if (intersection.t >= FLT_MAX) break;
+
+	//			ShadingData shadingData = scene->calculateShadingData(intersection, ray);
+	//			BSDF* bsdf = shadingData.bsdf;
+
+	//			// connect to camera
+	//			float px, py;
+	//			if (scene->camera.projectOntoCamera(shadingData.x, px, py))
+	//			{
+	//				if (scene->visible(shadingData.x, scene->camera.origin))
+	//				{
+	//					Vec3 wo = -ray.dir;
+	//					shadingData.wo = wo;
+
+	//					Vec3 toCam = (scene->camera.origin - shadingData.x).normalize();
+	//					Colour f = bsdf->evaluate(shadingData, toCam);
+	//					float cosTheta = max(0.0f, Dot(toCam, shadingData.sNormal));
+	//					Colour col = throughput * f * cosTheta;
+	//					if (col.Lum() > 0)
+	//					{
+	//						film->splat(px, py, col);
+	//						unsigned char r = (unsigned char)(col.r * 255);
+	//						unsigned char g = (unsigned char)(col.g * 255);
+	//						unsigned char b = (unsigned char)(col.b * 255);
+	//						film->tonemap(px, py, r, g, b);
+	//						canvas->draw(px, py, r, g, b);
+	//					}
+	//				}
+	//			}
+
+	//			// Russian roulette
+	//			float p = min(throughput.Lum(), 0.9f);
+	//			if (sampler->next() > p) break;
+	//			throughput = throughput / p;
+
+	//			// Sample next direction
+	//			Colour bsdfVal;
+	//			float pdf;
+	//			Vec3 wi = bsdf->sample(shadingData, sampler, bsdfVal, pdf);
+	//			float cosTheta = max(0.0f, Dot(wi, shadingData.sNormal));
+	//			if (pdf < 1e-6f || bsdfVal.Lum() <= 0.0f || cosTheta <= 0.0f) break;
+
+	//			throughput = throughput * bsdfVal * (cosTheta / pdf);
+	//			ray.init(shadingData.x + wi * EPSILON, wi);
+	//		}
+	//	}
+	//}
+
+	void connectToCamera(Vec3 p, Vec3 n, Colour col) {
+		float x, y;
+		if (!scene->camera.projectOntoCamera(p, x, y)) return;
+
+		Vec3 pToCam = scene->camera.origin - p;
+		if (pToCam.length() <= 0.0f) return;
+		float r2Inv = 1.0f / pToCam.lengthSq();
+		pToCam = pToCam.normalize();
+
+		float costheta = max(0, -pToCam.dot(scene->camera.viewDirection));
+		float costhetaL = max(0, pToCam.dot(n));
+		float GeomtryTermHalfArea = costheta * costhetaL * r2Inv;
+
+		if (GeomtryTermHalfArea > 0) {
+			if (!scene->visible(p, scene->camera.origin)) {
+				return;
+			}
+			else {
+				float cos2 = costheta * costheta;
+				float cos4 = cos2 * cos2;
+				float we = 1.0f / (scene->camera.Afilm * cos4);
+				film->splat(x, y, col * GeomtryTermHalfArea * we);
+			}
+		}
+		else {
+			return;
+		}
+
+	}
+
+	void lightTrace(Sampler* sampler) {
+		float pmf;
+		Light* light = scene->sampleLight(sampler, pmf);
+		if (!light) return;
+
+		float pdfPosition = 0.0f;
+		Vec3 lightPos = light->samplePositionFromLight(sampler, pdfPosition);
+		float pdfDirection = 0.0f;
+		Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDirection);
+		wi = wi.normalize();
+		float pdfTotal = pmf * pdfPosition;
+		if (pdfTotal <= 0.0f) return;
+		Colour Le = light->evaluate(-wi);
+		Colour col = Le / pdfTotal;
+		connectToCamera(lightPos, light->normal(-wi), col);
+		Ray r(lightPos + (wi * 0.001f), wi);
+		Le = Le * wi.dot(light->normal(-wi));
+		pdfTotal *= pdfDirection;
+		lightTracePath(r, Colour(1.0f, 1.0f, 1.0f), Le / pdfTotal, sampler, 0);
+	}
+
+	void lightTracePath(Ray& r, Colour pathThroughput, Colour Le, Sampler* sampler, int depth) {
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+		if (shadingData.t < FLT_MAX)
+		{
+			Vec3 wi1 = scene->camera.origin - shadingData.x;
+			wi1 = wi1.normalize();
+
+			connectToCamera(shadingData.x, shadingData.sNormal, (pathThroughput * shadingData.bsdf->evaluate(shadingData, -wi1) * Le));
+
+			if (depth > MAX_DEPTH)
+			{
+				return;
+			}
+			float russianRouletteProbability = min(pathThroughput.Lum(), 0.9f);
+			if (sampler->next() < russianRouletteProbability)
+			{
+				pathThroughput = pathThroughput / russianRouletteProbability;
+			}
+			else
+			{
+				return;
+			}
+
+			float pdf;
+			Colour bsdf;
+			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdf, pdf);
+			wi = wi.normalize();
+			pathThroughput = pathThroughput * bsdf * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
+
+			r.init(shadingData.x + (wi * 0.001f), wi);
+			lightTracePath(r, pathThroughput, Le, sampler, depth + 1);
+		}
 	}
 
 	// Compute direct lighting for an image sampler
@@ -321,7 +485,7 @@ public:
 			}
 			return shadingData.bsdf->evaluate(shadingData, Vec3(0, 1, 0));
 		}
-		return scene->background->evaluate(shadingData, r.dir);
+		return scene->background->evaluate(r.dir);
 	}
 	Colour viewNormals(Ray& r)
 	{
@@ -333,6 +497,25 @@ public:
 			return Colour(fabsf(shadingData.sNormal.x), fabsf(shadingData.sNormal.y), fabsf(shadingData.sNormal.z));
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
+	}
+
+	void renderTileBased(int tileX, int tileY, int tileSize, int filmWidth, int filmHeight) {
+		int startX = tileX * tileSize;
+		int startY = tileY * tileSize;
+		int endX = min(startX + tileSize, filmWidth);
+		int endY = min(startY + tileSize, filmHeight);
+
+		for (int y = startY; y < endY; y++) {
+			for (int x = startX; x < endX; x++) {
+				//Colour col = TileBasedBuffer[y * filmWidth + x];
+				//unsigned char r = static_cast<unsigned char>(col.r * 255);
+				//unsigned char g = static_cast<unsigned char>(col.g * 255);
+				//unsigned char b = static_cast<unsigned char>(col.b * 255);
+				unsigned char r, g, b;
+				film->tonemap(x, y, r, g, b);
+				canvas->draw(x, y, r, g, b);
+			}
+		}
 	}
 
 	// Single Thread rendering
@@ -358,8 +541,8 @@ public:
 			}
 		}
 	}
-	// Tile based rendering
-	void MTrender() {
+	// Tile based rendering for path trace
+	void PathTraceMT() {
 		const int width = (int)film->width;
 		const int height = (int)film->height;
 
@@ -452,11 +635,71 @@ public:
 		}
 	}
 
+	void LightTraceMT() {
+		const int filmWidth = film->width;
+		const int filmHeight = film->height;
+		const int tileSize = 32;
+
+		int numTilesX = (filmWidth + tileSize - 1) / tileSize;
+		int numTilesY = (filmHeight + tileSize - 1) / tileSize;
+		int totalTiles = numTilesX * numTilesY;
+
+		// atomic counter
+		std::atomic<int> nextTile(0);
+
+		int paths = (filmWidth * filmHeight) / totalTiles;
+
+		std::vector<std::thread> threads;
+		threads.reserve(numProcs);
+
+		// multi-thread for splatting
+		auto Splat = [&]() {
+			while (true) {
+				int tileIndex = nextTile.fetch_add(1);
+				if (tileIndex >= totalTiles)
+					break;
+				int tileX = tileIndex % numTilesX;
+				int tileY = tileIndex / numTilesX;
+				for (int i = 0; i < paths; ++i) {
+					lightTrace(samplers);
+				}
+			}};
+		for (int i = 0; i < numProcs; i++) {
+			threads.emplace_back(Splat);
+		}
+		for (auto& t : threads) {
+			if (t.joinable())
+				t.join();
+		}
+		threads.clear();
+
+		nextTile = 0; //reset atomic
+		auto Render = [&]() {
+			while (true) {
+				int tileIndex = nextTile.fetch_add(1);
+				if (tileIndex >= totalTiles)
+					break;
+				int tileX = tileIndex % numTilesX;
+				int tileY = tileIndex / numTilesX;
+				renderTileBased(tileX, tileY, tileSize, filmWidth, filmHeight);
+			}
+			};
+
+		for (int i = 0; i < numProcs; i++) {
+			threads.emplace_back(Render);
+		}
+		for (auto& t : threads) {
+			if (t.joinable())
+				t.join();
+		}
+	}
+
 	void render()
 	{
 		//traceVPLs(samplers, 64);
 		film->incrementSPP();
-		MTrender();
+		LightTraceMT();
+		//PathTraceMT();
 		float* denoised = new float[film->width * film->height * 3];
 		denoiseWithOIDN(reinterpret_cast<float*>(film->film),
 			reinterpret_cast<float*>(film->albedoBuffer),

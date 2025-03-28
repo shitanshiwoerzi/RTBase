@@ -134,7 +134,7 @@ public:
 		interpolatedU = vertices[0].u * alpha + vertices[1].u * beta + vertices[2].u * gamma;
 		interpolatedV = vertices[0].v * alpha + vertices[1].v * beta + vertices[2].v * gamma;
 	}
-	// Add code here
+
 	Vec3 sample(Sampler* sampler, float& pdf)
 	{
 		float r1 = sampler->next();  // generate random number r1

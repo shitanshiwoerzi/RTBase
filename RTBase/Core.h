@@ -531,7 +531,8 @@ public:
 		{
 			float l = 1.0f / sqrtf(w.x * w.x + w.z * w.z);
 			u = Vec3(w.z * l, 0.0f, -w.x * l);
-		} else
+		}
+		else
 		{
 			float l = 1.0f / sqrtf(w.y * w.y + w.z * w.z);
 			u = Vec3(0, w.z * l, -w.y * l);

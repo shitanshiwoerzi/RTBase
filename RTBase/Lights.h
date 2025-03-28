@@ -18,10 +18,10 @@ class Light
 {
 public:
 	virtual Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& emittedColour, float& pdf) = 0;
-	virtual Colour evaluate(const ShadingData& shadingData, const Vec3& wi) = 0;
+	virtual Colour evaluate(const Vec3& wi) = 0;
 	virtual float PDF(const ShadingData& shadingData, const Vec3& wi) = 0;
 	virtual bool isArea() = 0;
-	virtual Vec3 normal(const ShadingData& shadingData, const Vec3& wi) = 0;
+	virtual Vec3 normal(const Vec3& wi) = 0;
 	virtual float totalIntegratedPower() = 0;
 	virtual Vec3 samplePositionFromLight(Sampler* sampler, float& pdf) = 0;
 	virtual Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf) = 0;
@@ -38,7 +38,7 @@ public:
 		emittedColour = emission;
 		return triangle->sample(sampler, pdf);
 	}
-	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
+	Colour evaluate(const Vec3& wi)
 	{
 		if (Dot(wi, triangle->gNormal()) < 0)
 		{
@@ -54,7 +54,7 @@ public:
 	{
 		return true;
 	}
-	Vec3 normal(const ShadingData& shadingData, const Vec3& wi)
+	Vec3 normal(const Vec3& wi)
 	{
 		return triangle->gNormal();
 	}
@@ -68,9 +68,8 @@ public:
 	}
 	Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf)
 	{
-		// Add code to sample a direction from the light
-		Vec3 wi = Vec3(0, 0, 1);
-		pdf = 1.0f;
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		pdf = SamplingDistributions::cosineHemispherePDF(wi);
 		Frame frame;
 		frame.fromVector(triangle->gNormal());
 		return frame.toWorld(wi);
@@ -107,7 +106,7 @@ public:
 		reflectedColour = emission;
 		return wi;
 	}
-	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
+	Colour evaluate(const Vec3& wi)
 	{
 		return emission;
 	}
@@ -119,7 +118,7 @@ public:
 	{
 		return false;
 	}
-	Vec3 normal(const ShadingData& shadingData, const Vec3& wi)
+	Vec3 normal(const Vec3& wi)
 	{
 		return -wi;
 	}
@@ -286,10 +285,10 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		Vec3 wi = this->sampler.sample(sampler->next(), sampler->next(), pdf);
-		reflectedColour = evaluate(shadingData, wi); //evaluate radiance
+		reflectedColour = evaluate(wi); //evaluate radiance
 		return wi;
 	}
-	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
+	Colour evaluate(const Vec3& wi)
 	{
 		//float u = atan2f(wi.z, wi.x);
 		//u = (u < 0.0f) ? u + (2.0f * M_PI) : u;
@@ -306,7 +305,7 @@ public:
 	{
 		return false;
 	}
-	Vec3 normal(const ShadingData& shadingData, const Vec3& wi)
+	Vec3 normal(const Vec3& wi)
 	{
 		return -wi;
 	}
@@ -333,11 +332,16 @@ public:
 		pdf = 1.0f / (4 * M_PI * SQ(use<SceneBounds>().sceneRadius));
 		return p;
 	}
-	Vec3 sampleDirectionFromLight(Sampler* sampler, float& pdf)
+	Vec3 sampleDirectionFromLight(Sampler* _sampler, float& pdf)
 	{
-		// Replace this tabulated sampling of environment maps
-		Vec3 wi = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
-		pdf = SamplingDistributions::uniformSpherePDF(wi);
+		//Vec3 wi = SamplingDistributions::uniformSampleSphere(sampler->next(), sampler->next());
+		//pdf = SamplingDistributions::uniformSpherePDF(wi);
+		//return wi;
+
+		float u1 = _sampler->next();
+		float u2 = _sampler->next();
+		Vec3 wi = sampler.sample(u1, u2, pdf);
+
 		return wi;
 	}
 
