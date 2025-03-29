@@ -26,7 +26,7 @@ struct VPL
 };
 
 extern bool isLightTrace = true;
-extern bool isPathTrace = false;
+extern bool isPathTrace = true;
 
 class RayTracer
 {
