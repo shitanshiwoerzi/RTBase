@@ -19,10 +19,11 @@ struct VPL
 	// or at least position, normal, flux/Le, bsdf
 	ShadingData sData;
 	Colour Le;
+	bool isLight;
 
 	VPL() {}
-	VPL(const ShadingData& _sData, const Colour& _Le)
-		: sData(_sData), Le(_Le) {}
+	VPL(ShadingData _sData, Colour _Le, bool _isLight)
+		: sData(_sData), Le(_Le), isLight(_isLight) {}
 };
 
 extern bool isLightTrace = true;
@@ -238,6 +239,47 @@ public:
 		return result;
 	}
 
+	Colour computeDirectInstantRadiosity(ShadingData shadingData)
+	{
+		if (shadingData.bsdf->isPureSpecular() == true)
+		{
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
+
+		Colour result(0, 0, 0);
+		for (auto vpl : vpls) {
+			Colour temp(0, 0, 0);
+			Vec3 wi(0, 0, 0);
+			float GeomtryTermHalfArea = 0;
+
+			wi = vpl.sData.x - shadingData.x;
+			float r2Inv = 1.0f / wi.lengthSq();
+			wi = wi.normalize();
+			float costheta = max(0, wi.dot(shadingData.sNormal));
+			float costhetaL = max(0, -wi.dot(vpl.sData.sNormal));
+			GeomtryTermHalfArea = costheta * costhetaL * r2Inv;
+			// visibility
+			if (GeomtryTermHalfArea > 0) {
+				if (!scene->visible(shadingData.x, vpl.sData.x)) {
+					GeomtryTermHalfArea = 0;
+				}
+			}
+			else {
+				GeomtryTermHalfArea = 0;
+			}
+
+			if (vpl.isLight) {
+				temp = vpl.Le * shadingData.bsdf->evaluate(shadingData, wi) * GeomtryTermHalfArea;
+			}
+			else {
+				temp = vpl.sData.bsdf->evaluate(vpl.sData, wi) * shadingData.bsdf->evaluate(shadingData, wi) * GeomtryTermHalfArea;
+			}
+
+			result = result + temp;
+		}
+		return result;
+	}
+
 	const int MAX_DEPTH = 16;
 
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler, bool canHitLight = true)
@@ -292,6 +334,71 @@ public:
 			r.init(shadingData.x + (wi * EPSILON), wi);
 			return (direct + pathTrace(r, pathThroughput, depth + 1, sampler, shadingData.bsdf->isPureSpecular()));
 		}
+		return scene->background->evaluate(r.dir);
+	}
+
+	Colour pathTraceHybrid(Ray& r, Colour& pathThroughput, int depth, Sampler* sampler, bool canHitLight = true)
+	{
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+		if (shadingData.t < FLT_MAX)
+		{
+			// if hit light source
+			if (shadingData.bsdf->isLight())
+			{
+				if (canHitLight == true)
+				{
+					return pathThroughput * shadingData.bsdf->emit(shadingData, shadingData.wo);
+				}
+				else
+				{
+					return Colour(0.0f, 0.0f, 0.0f);
+				}
+			}
+
+			// compute direct indirect
+			Colour direct = pathThroughput * computeDirect(shadingData, sampler);
+			Colour indirectIR = pathThroughput * computeDirectInstantRadiosity(shadingData);
+			Colour combinedDirect = direct + indirectIR;
+
+			if (depth > MAX_DEPTH)
+			{
+				return combinedDirect;
+			}
+
+			float rrProb = min(pathThroughput.Lum(), 0.9f);
+			if (sampler->next() < rrProb)
+			{
+				pathThroughput = pathThroughput / rrProb;
+			}
+			else
+			{
+				return combinedDirect;
+			}
+
+			// sample BSDF direction
+			float pdf;
+			Colour bsdfVal;
+			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, pdf);
+			if (pdf < 1e-6f || !std::isfinite(pdf) || bsdfVal.hasNaN())
+			{
+				return combinedDirect;
+			}
+
+			float cosTheta = fmaxf(0.0f, Dot(wi, shadingData.sNormal));
+			if (!std::isfinite(cosTheta) || bsdfVal.hasNaN())
+			{
+				return combinedDirect;
+			}
+
+			// update Path Throughput
+			pathThroughput = pathThroughput * bsdfVal * (cosTheta / pdf);
+			r.init(shadingData.x + (wi * EPSILON), wi);
+			Colour indirectPath = pathTraceHybrid(r, pathThroughput, depth + 1, sampler, shadingData.bsdf->isPureSpecular());
+			return combinedDirect + indirectPath;
+		}
+
 		return scene->background->evaluate(r.dir);
 	}
 
@@ -399,6 +506,22 @@ public:
 				return shadingData.bsdf->emit(shadingData, shadingData.wo);
 			}
 			return computeDirect(shadingData, sampler);
+		}
+		return Colour(0.0f, 0.0f, 0.0f);
+	}
+
+	Colour directInstantRadiosity(Ray& r)
+	{
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
+		//IntersectionData intersection = scene->traverse(r);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+		if (shadingData.t < FLT_MAX)
+		{
+			if (shadingData.bsdf->isLight())
+			{
+				return shadingData.bsdf->emit(shadingData, shadingData.wo);
+			}
+			return computeDirectInstantRadiosity(shadingData);
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
@@ -524,8 +647,10 @@ public:
 							film->normalBuffer[idx] = viewNormals(ray);
 						}
 
+						//Colour col = directInstantRadiosity(ray);
 						Colour throughput(1.0f, 1.0f, 1.0f);  // init throughput
-						Colour col = pathTrace(ray, throughput, 0, sampler);
+						//Colour col = pathTrace(ray, throughput, 0, sampler);
+						Colour col = pathTraceHybrid(ray, throughput, 0, sampler);
 						film->splat(px, py, col);
 
 						// Welford update
@@ -627,7 +752,7 @@ public:
 
 	void render()
 	{
-		//traceVPLs(samplers, 64);
+		traceVPLs(samplers, 5);
 		film->incrementSPP();
 		if (isLightTrace) LightTraceMT();
 		if (isPathTrace) PathTraceMT();
@@ -659,90 +784,63 @@ public:
 	{
 		stbi_write_png(filename.c_str(), canvas->getWidth(), canvas->getHeight(), 3, canvas->getBackBuffer(), canvas->getWidth() * 3);
 	}
-	void traceVPLs(Sampler* sampler, int N_VPLs)
-	{
+	void traceVPLs(Sampler* sampler, int N_VPLs) {
 		vpls.clear();
-		const int maxBounces = 3; // or 1 for simpler
-
-		for (int i = 0; i < N_VPLs; i++)
-		{
-			// sample a light source
+		vpls.reserve(N_VPLs);
+		for (int i = 0; i < N_VPLs; ++i) {
 			float pmf;
 			Light* light = scene->sampleLight(sampler, pmf);
-			if (!light || pmf < 1e-6f)
-				continue;
+			if (!light) continue;
 
-			// sample a ray
-			float rayPdf;
-			Colour Lemit;
-			Ray ray = light->sampleRay(sampler, rayPdf, Lemit);
-			if (rayPdf < 1e-6f || Lemit.Lum() < 1e-9f)
-				continue;
+			float pdfPosition = 0.0f;
+			Vec3 lightPos = light->samplePositionFromLight(sampler, pdfPosition);
 
-			// init flux = Lemit / (pmf * rayPdf * N_VPLs)
-			Colour flux = Lemit / ((pmf * rayPdf + 1e-6f) * (float)N_VPLs);
+			float pdfDirection = 0.0f;
+			Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDirection);
+			wi = wi.normalize();
+			float pdfTotal = pmf * pdfPosition * (float)N_VPLs;
 
-			//start bouncing
-			for (int bounce = 0; bounce < maxBounces; bounce++)
-			{
-				IntersectionData isect = scene->bvh->traverse(ray, scene->triangles);
-				if (isect.t >= FLT_MAX) break; // hit background => stop
+			if (pdfTotal <= 0.0f) continue;
 
-				ShadingData sData = scene->calculateShadingData(isect, ray);
-				if (sData.bsdf->isLight()) break;
+			Colour Le = light->evaluate(-wi);
+			Colour col = Le / pdfTotal;
 
-				// store vpl
-				VPL vpl;
-				vpl.sData = sData;
-				vpl.Le = flux;
-				vpls.push_back(vpl);
+			// create direct light
+			vpls.emplace_back(VPL(ShadingData(lightPos, light->normal(wi)), col, true));
 
-				// next time bounce
-				Colour f;
-				float bsdfPdf;
-				Vec3 wi = sData.bsdf->sample(sData, sampler, f, bsdfPdf);
-				float cosTerm = max(Dot(wi, sData.sNormal), 0.0f);
+			Ray r(lightPos + (wi * 0.001f), wi);
+			Le = Le * wi.dot(light->normal(-wi));
+			pdfTotal *= pdfDirection;
 
-				// update flux
-				flux = flux * f * (cosTerm / (bsdfPdf + 1e-6f));
-
-				// russian Roulette
-				if (bounce > 1)
-				{
-					float rr = min(flux.Lum(), 0.9f);
-					if (sampler->next() > rr) break;
-					flux = flux / rr;
-				}
-
-				if (flux.Lum() < 1e-4f) break;
-				ray.init(sData.x + wi * EPSILON, wi);
-			}
+			// indirect light
+			VPLTracePath(r, Colour(1, 1, 1), Le / pdfTotal, sampler, 0);
 		}
 	}
-	Colour computeVPLContribution(const ShadingData& shadingData)
-	{
-		Colour sum(0.0f, 0.0f, 0.0f);
 
-		for (auto& vpl : vpls)
+	void VPLTracePath(Ray& r, Colour pathThroughput, Colour Le, Sampler* sampler, int depth) {
+		IntersectionData intersection = scene->bvh->traverse(r, scene->triangles);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+		if (shadingData.t < FLT_MAX)
 		{
-			// geometry
-			Vec3 dir = vpl.sData.x - shadingData.x;
-			float dist2 = dir.lengthSq();
-			if (dist2 < 1e-9f) continue;
-			float dist = sqrtf(dist2);
-			dir = dir / dist;
+			if (shadingData.bsdf->isLight())
+				return;
+			else
+				vpls.emplace_back(VPL(shadingData, pathThroughput * Le, shadingData.bsdf->isLight()));
+			if (depth > MAX_DEPTH) return;
+			float russianRouletteProbability = min(pathThroughput.Lum(), 0.9f);
+			if (sampler->next() < russianRouletteProbability)
+				pathThroughput = pathThroughput / russianRouletteProbability;
+			else
+				return;
 
-			float cos_x = max(Dot(dir, shadingData.sNormal), 0.0f);
-			float cos_vpl = max(-Dot(dir, vpl.sData.sNormal), 0.0f);
-			float G = (cos_x * cos_vpl) / (dist2);
-			if (G <= 0) continue;
-			if (!scene->visible(shadingData.x, vpl.sData.x)) continue;
-
-			// BSDF at shadingData
-			Colour f_cam = shadingData.bsdf->evaluate(shadingData, dir);
-			sum = sum + f_cam * vpl.Le * G;
+			float pdf;
+			Colour bsdf;
+			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdf, pdf);
+			wi = wi.normalize();
+			pathThroughput = pathThroughput * bsdf * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
+			r.init(shadingData.x + (wi * 0.001f), wi);
+			VPLTracePath(r, pathThroughput, Le, sampler, depth + 1);
 		}
-
-		return sum;
 	}
 };
